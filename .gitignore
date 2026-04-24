@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Distribution / packaging
+.installed.files
+pip-wheel-metadata/
+
+# Model weights (too large for git; download on demand)
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.gguf
+
+# HuggingFace cache (downloaded models)
+.cache/
+hub/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.prof
+
+# Triton cache
+~/.triton/
+triton_cache/
+
+# Secrets / keys
+*.env
+.env*
+secrets.*
+
+# Benchmarks outputs (re-run to regenerate)
+benchmarks/results/

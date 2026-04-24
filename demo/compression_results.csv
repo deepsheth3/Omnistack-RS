@@ -1,0 +1,4 @@
+mode,bits,compression_vs_fp32,ppl_mean,ppl_std,ppl_vs_baseline_pct,time_seconds,n_kv_layers_hooked
+fp32,32,1.0x,62.1589,43.0574,+0.00%,1192.8,0
+int4,4,8.0x,66.2527,47.6948,+6.59%,11.9,64
+int4_qjl,5,6.4x,64.5484,44.5866,+3.84%,9.6,64
