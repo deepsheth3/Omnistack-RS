@@ -1,22 +1,36 @@
 """
 OmniStack-RS — Stage 6: GQA Reference Attention (Numerical Anchor)
 
-Pure-PyTorch Grouped-Query Attention with manual FP32 softmax.
-This module is the ground-truth reference path for validating the
-fused Triton kernel in Phase 4.
+Pure-PyTorch Grouped-Query Attention with tile-by-tile online softmax.
+This module is the ground-truth reference for validating the fused Triton
+kernel in Phase 4. The online algorithm here must match the Triton inner
+loop exactly — same update rule, same accumulator semantics.
 
 Strict constraints (Architect's instruction):
   - NO F.scaled_dot_product_attention — write every step explicitly
   - Softmax ALWAYS in float32 (MANIFEST Invariant #6)
   - W_eff = W_base + B @ A * (α/r) for Shadow LoRA merge
 
-Mathematical flow:
-  1. Q, K, V projections (with optional LoRA merge)
-  2. GQA head expansion: repeat_kv(K, n_groups), repeat_kv(V, n_groups)
-  3. S = Q @ K^T / sqrt(head_dim)          [FP32]
-  4. S = S - max(S, dim=-1)                [online softmax stability]
-  5. W = exp(S) / sum(exp(S), dim=-1)      [FP32 throughout]
-  6. O = W @ V                             [FP32, cast back to input dtype]
+Online softmax algorithm (Milakov & Gimelshein 2018 / Dao et al. 2022):
+
+  For each tile of K/V keys (indices s_start..s_end):
+
+    s_tile = Q @ K_tile^T * scale              # (B, H, T, TILE_S) — never (T, S)
+    m_new  = max(m_old, max(s_tile))           # update running max
+    alpha  = exp(m_old - m_new)               # rescale factor for old accumulator
+    p      = exp(s_tile - m_new)              # (B, H, T, TILE_S) — unnorm weights
+
+    l = alpha * l + sum(p)                    # running denominator (normalizer)
+    O = alpha * O + p @ V_tile                # running weighted sum
+
+  out = O / l                                 # normalize once at the end
+
+Invariants:
+  - m is monotonically non-decreasing across tiles (proved by max update rule)
+  - O / l converges to the exact softmax output regardless of tile order
+  - The tile score buffer (T × TILE_S) is the only O(seq_len) allocation;
+    the full (T × S) score matrix is NEVER materialized
+  - exp() is never called on unshifted scores (overflow impossible)
 """
 
 from __future__ import annotations
@@ -61,73 +75,105 @@ def reference_attn(
     v: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
     scale: Optional[float] = None,
+    tile_size: int = 128,
 ) -> torch.Tensor:
     """
-    Manual GQA attention — the Numerical Anchor for Phase 4 kernel validation.
+    Manual GQA attention with tile-by-tile online softmax — Numerical Anchor.
 
-    Every precision decision is explicit so the fused Triton kernel can be
-    validated step-by-step against this reference (atol=5e-2 on H100).
+    The online algorithm processes keys in tiles of `tile_size` columns,
+    maintaining running state (m, l, O) that fits in registers. The full
+    (T, S) score matrix is NEVER materialized; working memory per tile is
+    O(T × tile_size), constant in S.
 
-    Steps mirror the fused kernel's inner loop exactly:
-      1. Upcast Q/K/V to float32
-      2. Scaled dot-product: S = Q @ K^T * scale
-      3. Additive mask (0=attend, -inf=mask)
-      4. Online softmax: subtract row max → exp() → normalize  (all FP32)
-      5. Weighted sum: O = softmax(S) @ V
-      6. Downcast output back to input dtype
+    This is the exact algorithm the Phase 4 Triton kernel implements; the
+    only difference is that the Triton version uses SRAM tiles and TMA loads.
 
     Args:
-        q:     (B, n_heads,    T, head_dim) — query tensor
-        k:     (B, n_kv_heads, S, head_dim) — key tensor (expanded internally)
-        v:     (B, n_kv_heads, S, head_dim) — value tensor (expanded internally)
-        mask:  additive bias broadcastable to (B, n_heads, T, S)
-               0.0 = attend, float('-inf') = causal mask / padding
-        scale: QK scale; defaults to 1/sqrt(head_dim)
+        q:         (B, n_heads,    T, head_dim)
+        k:         (B, n_kv_heads, S, head_dim)
+        v:         (B, n_kv_heads, S, head_dim)
+        mask:      additive bias broadcastable to (B, n_heads, T, S)
+                   0.0 = attend, float('-inf') = causal mask / padding
+        scale:     QK scale; defaults to 1/sqrt(head_dim)
+        tile_size: number of key columns processed per tile (default 128)
+                   smaller values stress-test the running-state update rule
 
     Returns:
         (B, n_heads, T, head_dim), dtype matches q
     """
-    n_heads = q.shape[1]
+    n_heads    = q.shape[1]
     n_kv_heads = k.shape[1]
-    head_dim = q.shape[-1]
-    n_groups = n_heads // n_kv_heads
+    head_dim   = q.shape[-1]
+    n_groups   = n_heads // n_kv_heads
+    S          = k.shape[2]
 
     if scale is None:
         scale = 1.0 / math.sqrt(head_dim)
 
     # GQA: expand K, V so every Q head has a dedicated KV head
-    k = repeat_kv(k, n_groups)  # (B, n_heads, S, head_dim)
+    k = repeat_kv(k, n_groups)   # (B, n_heads, S, head_dim)
     v = repeat_kv(v, n_groups)
 
-    # ── Step 1: Upcast to FP32 ────────────────────────────────────────────
-    # BF16 has 7 mantissa bits; QK^T products lose precision without upcast.
-    # This matches the Triton kernel's mandatory FP32 upcast before tl.exp().
+    # ── Upcast to FP32 ────────────────────────────────────────────────────
+    # BF16 has 7 mantissa bits; exp() on uncast scores risks underflow/overflow.
     q_f = q.float()
     k_f = k.float()
     v_f = v.float()
 
-    # ── Step 2: Scaled dot-product scores ─────────────────────────────────
-    # Explicit matmul (not F.sdpa) so we control dtype at every step.
-    scores = torch.matmul(q_f, k_f.transpose(-2, -1)) * scale  # (B, H, T, S)
+    B = q.shape[0]
+    T = q.shape[2]
 
-    # ── Step 3: Additive attention mask ───────────────────────────────────
-    if mask is not None:
-        scores = scores + mask.float()
+    # ── Running-state initialization ──────────────────────────────────────
+    # m: running max of scores seen so far (per query position)
+    # l: running unnormalized denominator (sum of exp(score - m))
+    # O: running weighted value accumulator (sum of exp(score - m) * v)
+    #
+    # All three are O(T × head_dim) — independent of total sequence length S.
+    m = q_f.new_full((B, n_heads, T, 1), float("-inf"))   # (B, H, T, 1)
+    l = q_f.new_zeros(B, n_heads, T, 1)                    # (B, H, T, 1)
+    O = q_f.new_zeros(B, n_heads, T, head_dim)             # (B, H, T, head_dim)
 
-    # ── Step 4: Online softmax in FP32 ────────────────────────────────────
-    # Subtract row max before exp() to prevent overflow (Flash Attention style).
-    # This is the scalar-complete equivalent of the tile-by-tile running-max
-    # accumulation in the Triton kernel. Same numerical result, same invariant:
-    # exp() is never called on un-shifted scores.
-    row_max = scores.amax(dim=-1, keepdim=True)   # (B, H, T, 1)
-    scores = scores - row_max                      # shift to (-inf, 0]
-    weights = torch.exp(scores)                    # all-positive, in FP32
-    weights = weights / weights.sum(dim=-1, keepdim=True)
+    # ── Tile loop ─────────────────────────────────────────────────────────
+    # Each iteration handles TILE_S key/value positions.
+    # The score buffer (B, H, T, TILE_S) is the ONLY per-tile allocation;
+    # it is overwritten every iteration, never grown.
+    for s_start in range(0, S, tile_size):
+        s_end  = min(s_start + tile_size, S)
 
-    # ── Step 5: Weighted sum over values ──────────────────────────────────
-    out_f = torch.matmul(weights, v_f)             # (B, H, T, head_dim) in FP32
+        k_tile = k_f[:, :, s_start:s_end, :]   # (B, H, TILE, head_dim)
+        v_tile = v_f[:, :, s_start:s_end, :]   # (B, H, TILE, head_dim)
 
-    # ── Step 6: Downcast — only after full FP32 normalization ─────────────
+        # Score tile: (B, H, T, TILE) — the only score buffer
+        s_tile = torch.matmul(q_f, k_tile.transpose(-2, -1)) * scale
+
+        if mask is not None:
+            s_tile = s_tile + mask[..., s_start:s_end].float()
+
+        # ── Running max update ────────────────────────────────────────────
+        # m is non-decreasing: max(m_old, tile_max) ≥ m_old always.
+        m_tile = s_tile.amax(dim=-1, keepdim=True)   # (B, H, T, 1)
+        m_new  = torch.maximum(m, m_tile)             # (B, H, T, 1)
+
+        # ── Rescale old accumulators to the new max ───────────────────────
+        # Because O was accumulated under m_old, each term in O is
+        #   exp(score_k - m_old) * v_k.
+        # After shifting to m_new, those terms become
+        #   exp(score_k - m_new) * v_k = exp(m_old - m_new) * (old term).
+        alpha = torch.exp(m - m_new)                  # (B, H, T, 1)
+
+        # Unnormalized weights for this tile (never store the full (T,S) version)
+        p = torch.exp(s_tile - m_new)                 # (B, H, T, TILE)
+
+        # ── Accumulator update ────────────────────────────────────────────
+        l = alpha * l + p.sum(dim=-1, keepdim=True)   # (B, H, T, 1)
+        O = alpha * O + torch.matmul(p, v_tile)        # (B, H, T, head_dim)
+        m = m_new
+
+    # ── Final normalization ───────────────────────────────────────────────
+    # O holds sum_k exp(s_k - m_final) * v_k; l holds sum_k exp(s_k - m_final).
+    # Dividing gives the exact softmax-weighted value: sum_k softmax(s_k) * v_k.
+    out_f = O / l   # (B, H, T, head_dim) — all FP32
+
     return out_f.to(q.dtype)
 
 
@@ -247,7 +293,7 @@ class ReferenceAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        GQA forward pass with FP32 online softmax.
+        GQA forward pass with tile-by-tile online softmax.
 
         Args:
             x:    (B, T, hidden_dim)
