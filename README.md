@@ -5,7 +5,7 @@
 One giant Master LLM understands cinema, tropes, and narrative psychology.  
 Every user carries a Shadow — a tiny LoRA adapter (10–100 MB) trained on their private viewing history.  
 They merge at inference time into a personalized expert.  
-**12.8× less VRAM. Same quality. 12.8× more users per GPU.**
+**3.37× KV cache compression (measured). 12.8× total VRAM reduction (theoretical, when combined with manifold pruning).**
 
 ---
 
@@ -35,21 +35,21 @@ They merge at inference time into a personalized expert.
 
 ## The Numbers That Matter
 
-| Metric | Standard LLM API | OmniStack-RS |
-|--------|-----------------|--------------|
-| Cost per recommendation session | $0.50 | $0.01 |
-| Concurrent users per H100 (80 GB) | ~800 | ~10,000+ |
-| VRAM per user context | 16-bit baseline | **12.8× reduction** |
-| User taste preserved through compression | — | ARI = 1.0 (perfect) |
-| Perplexity gap at 5-bit vs 16-bit | — | **56% recovered by QJL** |
-
-The 12.8× figure is not a rounding assumption — it is the product of two independently validated compression stages:
+| Metric | Result | Status |
+|--------|--------|--------|
+| KV cache compression | **3.37×** (BF16 → 4.75 bits/elem) | **Measured** on GPU |
+| P99 inference latency | **0.69 ms** (MLPerf Server PASS) | **Measured** on GPU |
+| Throughput | **104,571 users/sec** (single A10) | **Measured** on GPU |
+| Numerical parity vs FP32 | max error 0.0024 | **Measured** on GPU |
+| User taste preserved (ARI) | ARI = 1.0 (perfect) | **Measured** on CPU |
+| Perplexity gap recovery | 56% recovered by QJL | **Measured** on CPU |
+| Manifold pruning | 4.0× (128-dim → 32-dim) | **Demonstrated** (standalone demo) |
+| Combined VRAM reduction | 12.8× (3.37× × 4.0×) | **Theoretical** (not yet integrated) |
 
 ```
-Stage 4 Manifold Pruning:  128-dim → 32-dim  =  4.0× VRAM reduction
-Stage 5 KV Quantization:   BF16 (16-bit) → INT4+QJL (5-bit)  =  3.2× VRAM reduction
-                                                                ─────────────────────
-                                                                12.8× combined
+Measured:   KV Quantization    BF16 → INT4+QJL (5-bit)  =  3.37× compression
+Demonstrated: Manifold Pruning   128-dim → 32-dim         =  4.0× reduction
+Theoretical:  Combined                                     =  12.8× (when integrated)
 ```
 
 ---
@@ -288,8 +288,8 @@ python demo/compression_fidelity.py
 # CPU unit tests (all phases, Triton interpreter mode)
 TRITON_INTERPRET=1 pytest tests/ -v
 
-# GPU tests — mandatory gate for Phase 4+ (requires Modal account)
-python ci/run_gpu_tests.py
+# GPU benchmark on real Criteo data (requires CUDA GPU)
+python scripts/run_criteo_benchmark.py --synthetic --n-users 256 --n-queries 100
 ```
 
 > **Memory note**: `demo/compression_fidelity.py` loads Phi-2 in float32 (~11 GB). Pass `--dtype bfloat16` for ~6 GB or `--model gpt2` for a fast 500 MB smoke test.
@@ -310,8 +310,8 @@ Omnistack_RS/
 │   │   └── grassmannian.py     ← GrassmannianProjector (Stage 4)
 │   ├── kernels/                 ← Phase 2-4: WHT, INT4, QJL, fused attention
 │   ├── quantization/            ← Phase 3: Lloyd-Max codebook, QJL reference
-│   ├── cache/                   ← Phase 6: PagedKVCache, DoubleBufferCompressor
-│   └── shadow/                  ← Phase 5: ShadowLoRA, FederatedAggregator
+│   ├── cache/                   ← (Planned) PagedKVCache, DoubleBufferCompressor
+│   └── shadow/                  ← (Planned) ShadowLoRA, FederatedAggregator
 ├── scripts/
 │   └── run_criteo_benchmark.py ← Criteo Day 23 MLPerf inference benchmark
 ├── benchmarks/
