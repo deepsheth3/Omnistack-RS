@@ -1,0 +1,48 @@
+{
+  "config": {
+    "criteo_path": null,
+    "bake_cache": "criteo_baked.pt",
+    "output_json": "mlperf_results.json",
+    "n_users": 64,
+    "batch_size": 64,
+    "n_warmup": 5,
+    "n_queries": 5,
+    "target_qps": 50.0,
+    "synthetic": true,
+    "force_rebake": false,
+    "device": "cuda",
+    "max_rows": 5000000,
+    "seed": 42
+  },
+  "device": "cuda",
+  "cuda_device_name": "NVIDIA A10",
+  "n_users_loaded": 256,
+  "n_queries_timed": 5,
+  "latencies_ms": [
+    523.273193359375,
+    523.0653686523438,
+    525.5885009765625,
+    526.1096801757812,
+    520.9415893554688
+  ],
+  "p50_ms": 523.273193359375,
+  "p90_ms": 526.1096801757812,
+  "p95_ms": 526.1096801757812,
+  "p99_ms": 526.1096801757812,
+  "mean_ms": 523.7956665039062,
+  "e2e_latencies_ms": [
+    523.273193359375,
+    1019.4879889426928,
+    1525.4289114892388,
+    2045.7792148701014,
+    2557.853638361806
+  ],
+  "e2e_p99_ms": 2557.853638361806,
+  "qps_measured": 1.9091414151524724,
+  "mlperf_p99_pass": false,
+  "parity_max_atol": 0.002403,
+  "parity_mean_atol": 0.000155,
+  "parity_pass": true,
+  "codec_compression_ratio": 3.368,
+  "bits_per_element": 4.75
+}
