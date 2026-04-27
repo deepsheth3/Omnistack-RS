@@ -1,0 +1,21 @@
+{
+  "submitter": "deep_sheth",
+  "division": "open",
+  "system_name": "A10_omnistack",
+  "system_type": "datacenter",
+  "comment": "Lambda GPU Cloud / OmniStack-RS — fused INT4+QJL attention + MLPerf LoadGen Server scenario (Open; not DLRMv3 closed task).",
+
+  "hardware": {
+    "accelerators_per_node": 1,
+    "accelerator_model_name": "NVIDIA A10",
+    "accelerator_memory_capacity_gb": 24,
+    "host_processor_model_name": "cloud_instance",
+    "host_memory_capacity_gb": 200,
+    "storage_model_name": "nvme_ssd"
+  },
+
+  "software": {
+    "framework": "PyTorch 2.x + Triton 3.x + mlcommons-loadgen",
+    "operating_system": "Ubuntu 22.04"
+  }
+}

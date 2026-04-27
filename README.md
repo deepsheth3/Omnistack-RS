@@ -120,6 +120,19 @@ zcat data/day_23.gz | head -n 5000000 > data/day_23_sample.tsv
 python scripts/run_criteo_benchmark.py --criteo-path data/day_23_sample.tsv --n-users 256 --n-queries 100
 ```
 
+### MLPerf LoadGen (Server scenario)
+
+The hand-rolled Poisson loop in `run_criteo_benchmark.py` is convenient; for **official MLPerf LoadGen** logs (`mlperf_log_summary.txt`, `mlperf_log_detail.txt`, `mlperf_log_accuracy.json`), use:
+
+```bash
+pip install -e ".[mlperf]"   # adds mlcommons-loadgen
+python scripts/run_criteo_loadgen.py --synthetic --log-outdir ./mlperf_logs
+# Smoke test (low QPS, short duration, enough queries for early stopping):
+python scripts/run_criteo_loadgen.py --synthetic --fast --log-outdir ./mlperf_logs
+```
+
+This uses the same Stages 1–2 transcoder + bake, then drives inference via **LoadGen** `IssueQuery` / `QuerySamplesComplete`. It is an **Open** custom benchmark of the OmniStack-RS kernel (not the closed MLPerf **DLRMv3** task). A submission-style directory tree and `measurements.json` live under [`submissions/deep_sheth/`](submissions/deep_sheth/).
+
 ---
 
 ## Phase 0 Results (Validated, Runnable on Mac CPU)
@@ -313,7 +326,10 @@ Omnistack_RS/
 │   ├── cache/                   ← (Planned) PagedKVCache, DoubleBufferCompressor
 │   └── shadow/                  ← (Planned) ShadowLoRA, FederatedAggregator
 ├── scripts/
-│   └── run_criteo_benchmark.py ← Criteo Day 23 MLPerf inference benchmark
+│   ├── run_criteo_benchmark.py  ← Criteo Day 23 MLPerf-style inference benchmark (hand-rolled traffic)
+│   └── run_criteo_loadgen.py   ← Same Stages 1–2, LoadGen Server scenario + official logs
+├── submissions/
+│   └── deep_sheth/              ← Open-benchmark layout, measurements.json, user.conf
 ├── benchmarks/
 │   ├── bench_ads.py            ← Ad recommendation throughput benchmark
 │   └── mlperf_ad_ranking.py    ← MLPerf-style ad ranking
@@ -340,7 +356,7 @@ Omnistack_RS/
 | 2  | Hadamard WHT kernel — `rotate_queries()`, `rotate_kv_cache()` | **Complete** |
 | 3  | INT4 Lloyd-Max + Rademacher QJL — per-group codebooks, ad serving benchmark | **Complete** |
 | 4  | Fused attention kernel (TMA, no inner-loop WHT, on-the-fly PRNG) | **Complete** |
-| 5  | Criteo Day 23 MLPerf benchmark — P99 0.69 ms, 104K users/sec on A10 | **Complete** |
+| 5  | Criteo Day 23 benchmark + MLPerf LoadGen Server (`run_criteo_loadgen.py`) | **Complete** |
 | 6  | Shadow LoRA: `ShadowLoRA`, `ShadowTrainer`, `FederatedAggregator` | Planned |
 | 7  | PagedKVCache + `DoubleBufferCompressor` async eviction | Planned |
 | 8  | ManifoldPruner: angular dedup + norm filter | Planned |

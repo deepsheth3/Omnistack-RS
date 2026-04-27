@@ -1,0 +1,36 @@
+{
+  "benchmark": "omnistack-rs_open_attention",
+  "scenario": "Server",
+  "division": "open",
+
+  "hardware": {
+    "accelerator": "NVIDIA A10 24GB",
+    "notes": "Measured on Lambda Cloud / NVIDIA A10 (single GPU). Driver 580.x, CUDA 13.x per instance image."
+  },
+
+  "software_stack": {
+    "python": ">=3.11",
+    "pytorch": ">=2.4",
+    "triton": ">=3.0.0",
+    "mlperf_loadgen": "mlcommons-loadgen (PyPI)",
+    "script": "scripts/run_criteo_loadgen.py"
+  },
+
+  "open_division_justification": {
+    "summary": "INT4 Lloyd-Max KV cache + 1-bit Rademacher QJL residual, Hadamard WHT pre-rotation, fused Triton omni_attn with O(1) Multi-LoRA pointer dispatch. This is a custom recommendation-serving attention path (not the MLPerf closed DLRMv3 reference model).",
+    "codec": "3.37x compression (4.75 bits/element) vs BF16 baselines in repo benchmark",
+    "measured_kernel_p99_ms": 0.69,
+    "measured_throughput_qps": 1633.93,
+    "measured_ups": 104571.3,
+    "data": "Criteo Day 23 sample (5M rows) or --synthetic"
+  },
+
+  "mlperf_loadgen": {
+    "scenario": "Server",
+    "default_target_qps": 1634,
+    "default_target_latency_ns": 100000000,
+    "default_min_query_count": 270336,
+    "default_min_duration_ms": 60000,
+    "fast_smoke_flags": "--fast uses min_query_count=500, min_duration_ms=5000, target_qps=20 unless overridden"
+  }
+}
