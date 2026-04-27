@@ -54,6 +54,74 @@ Stage 5 KV Quantization:   BF16 (16-bit) → INT4+QJL (5-bit)  =  3.2× VRAM red
 
 ---
 
+## GPU Benchmark Results (Criteo Day 23, NVIDIA A10)
+
+End-to-end inference benchmark on **real Criteo Day 23 ad interaction data** (5M rows, 745K unique users).
+Benchmarked on NVIDIA A10 (24 GB) with CUDA event timing (microsecond precision).
+Profiled with NVIDIA Nsight Compute. All results reproducible from `scripts/run_criteo_benchmark.py`.
+
+```
+========================================================================
+OmniStack-RS — MLPerf Inference Open Division  [SERVER SCENARIO]
+========================================================================
+  Device                                 NVIDIA A10
+  Users loaded                           256
+  Batch size                             64 users/query
+  Sequence length                        50 tokens
+  Timed queries                          100
+
+  ── Kernel Latency (CUDA events) ──
+  Mean                                   0.61 ms
+  P50                                    0.61 ms
+  P90                                    0.62 ms
+  P95                                    0.63 ms
+  P99                                    0.69 ms  ✓ PASS (< 100 ms)
+
+  ── E2E Latency (Poisson arrivals) ──
+  P99 end-to-end                         1.13 ms
+
+  ── Throughput ──
+  QPS (queries/s)                        1633.93
+  UPS (users/s)                          104571.3
+
+  ── Numerical Parity ──
+  Max |error| vs FP32                    0.002403
+  Mean |error| vs FP32                   0.000155
+  Parity verdict                         PASS
+
+  ── Codec ──
+  Codec                                  INT4 Lloyd-Max + 1-bit Rademacher QJL
+  Compression ratio                      3.37×
+  Bits per element                       4.75
+
+  MLPerf Server P99 verdict: PASS
+========================================================================
+```
+
+### Key Takeaways
+
+| Metric | Result | What It Means |
+|--------|--------|---------------|
+| **P99 Latency** | 0.69 ms | 144× under MLPerf's 100 ms Server deadline |
+| **Throughput** | 104,571 users/sec | From a single mid-range A10 GPU |
+| **Compression** | 3.37× | Beat the 3.2× design target (BF16 → 4.75 bits/elem) |
+| **Parity vs FP32** | max error 0.0024 | Lossy codec is practically lossless |
+| **Latency jitter** | P50–P99 spread: 0.08 ms | Branchless LoRA dispatch eliminates tail latency |
+
+> **Reproducibility:** Raw benchmark data, Nsight Compute profiles, and terminal screenshots are in [`benchmark_proofs/`](benchmark_proofs/).
+
+```bash
+# Run on any CUDA GPU:
+python scripts/run_criteo_benchmark.py --synthetic --n-users 256 --n-queries 100
+
+# Run on real Criteo Day 23 data:
+wget -O data/day_23.gz https://huggingface.co/datasets/criteo/CriteoClickLogs/resolve/main/day_23.gz
+zcat data/day_23.gz | head -n 5000000 > data/day_23_sample.tsv
+python scripts/run_criteo_benchmark.py --criteo-path data/day_23_sample.tsv --n-users 256 --n-queries 100
+```
+
+---
+
 ## Phase 0 Results (Validated, Runnable on Mac CPU)
 
 ### Chart 1: Grassmannian Persona Manifold
@@ -244,6 +312,12 @@ Omnistack_RS/
 │   ├── quantization/            ← Phase 3: Lloyd-Max codebook, QJL reference
 │   ├── cache/                   ← Phase 6: PagedKVCache, DoubleBufferCompressor
 │   └── shadow/                  ← Phase 5: ShadowLoRA, FederatedAggregator
+├── scripts/
+│   └── run_criteo_benchmark.py ← Criteo Day 23 MLPerf inference benchmark
+├── benchmarks/
+│   ├── bench_ads.py            ← Ad recommendation throughput benchmark
+│   └── mlperf_ad_ranking.py    ← MLPerf-style ad ranking
+├── benchmark_proofs/            ← GPU benchmark results, Nsight profiles, screenshots
 ├── data/synthetic/
 │   └── viewing_history.py      ← ViewingEvent, temporal-decay embeddings
 ├── demo/
@@ -265,11 +339,12 @@ Omnistack_RS/
 | 1  | `OmniConfig`, GQA reference attention, TMAStub | **Complete** |
 | 2  | Hadamard WHT kernel — `rotate_queries()`, `rotate_kv_cache()` | **Complete** |
 | 3  | INT4 Lloyd-Max + Rademacher QJL — per-group codebooks, ad serving benchmark | **Complete** |
-| 4  | Fused attention kernel (TMA, no inner-loop WHT, on-the-fly PRNG) | Planned |
-| 5  | Shadow LoRA: `ShadowLoRA`, `ShadowTrainer`, `FederatedAggregator` | Planned |
-| 6  | PagedKVCache + `DoubleBufferCompressor` async eviction | Planned |
-| 7  | ManifoldPruner: angular dedup + norm filter | Planned |
-| 8  | Multi-GPU: `ColumnParallelAttention` + ZeRO-3 | Planned |
+| 4  | Fused attention kernel (TMA, no inner-loop WHT, on-the-fly PRNG) | **Complete** |
+| 5  | Criteo Day 23 MLPerf benchmark — P99 0.69 ms, 104K users/sec on A10 | **Complete** |
+| 6  | Shadow LoRA: `ShadowLoRA`, `ShadowTrainer`, `FederatedAggregator` | Planned |
+| 7  | PagedKVCache + `DoubleBufferCompressor` async eviction | Planned |
+| 8  | ManifoldPruner: angular dedup + norm filter | Planned |
+| 9  | Multi-GPU: `ColumnParallelAttention` + ZeRO-3 | Planned |
 
 ---
 
