@@ -70,7 +70,7 @@ class LoadGenConfig:
     seed: int = 42
     # LoadGen
     log_outdir: str = "mlperf_logs"
-    server_target_qps: float = 1634.0
+    server_target_qps: float = 1000.0
     server_target_latency_ns: int = 100_000_000  # 100 ms MLPerf-style bound
     min_query_count: int = 270_336
     min_duration_ms: int = 60_000
@@ -242,7 +242,7 @@ def parse_args() -> LoadGenConfig:
         args.min_query_count = 500
         args.min_duration_ms = 5_000
         # High target QPS on CPU / Triton interpret fails latency SLO; use modest rate for smoke
-        if args.server_target_qps == 1634.0:
+        if args.server_target_qps == 1000.0:
             args.server_target_qps = 20.0
     cfg = LoadGenConfig(
         criteo_path=args.criteo_path,
